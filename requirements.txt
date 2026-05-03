@@ -1,0 +1,53 @@
+# ── Core Framework ─────────────────────────────────────────────────────────
+fastapi==0.111.1
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+
+# ── Configuration ──────────────────────────────────────────────────────────
+pydantic==2.7.4
+pydantic-settings==2.3.4
+
+# ── LangChain / LangGraph Ecosystem ────────────────────────────────────────
+# INTERVIEW: "Why LangGraph over plain LangChain?"
+# LangGraph adds stateful, cyclical graphs so agents can retry, loop, and branch.
+# Plain LangChain is DAG-only — no conditional routing, no retry loops.
+langchain
+langchain-core
+langchain-community
+langchain-groq
+langgraph
+
+# ── Vector Database ─────────────────────────────────────────────────────────
+# DESIGN CHOICE: ChromaDB is fully local and free.
+# Pinecone/Weaviate need cloud accounts. ChromaDB gives same API, zero cost.
+chromadb
+
+# ── Embeddings ──────────────────────────────────────────────────────────────
+# all-MiniLM-L6-v2: 80MB, 384-dim, runs on CPU, state-of-the-art for retrieval
+sentence-transformers==3.0.1
+
+# ── Sparse Retrieval ────────────────────────────────────────────────────────
+rank-bm25==0.2.2
+
+# ── PDF Processing ──────────────────────────────────────────────────────────
+PyMuPDF==1.24.5
+
+# ── Web Scraping ────────────────────────────────────────────────────────────
+httpx==0.27.0
+beautifulsoup4==4.12.3
+lxml==5.2.2
+
+# ── Evaluation ──────────────────────────────────────────────────────────────
+ragas==0.1.13
+datasets==2.20.0
+
+# ── Streaming ───────────────────────────────────────────────────────────────
+# DESIGN CHOICE: SSE over WebSockets — simpler, one-directional, HTTP/1.1 compat
+sse-starlette==2.1.2
+
+# ── Utilities ───────────────────────────────────────────────────────────────
+aiofiles==23.2.1
+numpy==1.26.4
+# tenacity: exponential backoff for Groq rate limits (30 RPM on free tier)
+tenacity==8.4.1
+structlog==24.2.0

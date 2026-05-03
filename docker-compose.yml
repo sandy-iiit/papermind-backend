@@ -1,0 +1,30 @@
+# DESIGN CHOICE: Docker keeps the environment reproducible.
+# ChromaDB is embedded (no separate container needed) — we mount a volume for persistence.
+# INTERVIEW: "How would you scale this?" Add Redis for caching, separate ChromaDB service.
+
+version: "3.9"
+
+services:
+  papermind-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/app/chroma_data
+      - uploaded_pdfs:/app/uploaded_pdfs
+    env_file:
+      - .env
+    environment:
+      - CHROMA_PERSIST_DIR=/app/chroma_data
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  chroma_data:
+  uploaded_pdfs:
