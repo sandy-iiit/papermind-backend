@@ -211,6 +211,10 @@ async def query_streaming(
         # Track which agents have been announced to avoid duplicate events
         announced_steps: set[str] = set()
 
+        # Capture final state from streaming events instead of re-invoking
+        # This prevents the double-execution bug that was doubling all API calls
+        final_state: dict = {}
+
         try:
             # astream_events streams events as they happen in the graph
             # INTERVIEW: "What events does LangGraph stream?"
@@ -244,6 +248,17 @@ async def query_streaming(
                                 "iteration": initial_state.get("iteration_count", 0),
                             }),
                         }
+
+                # ── Capture final state from node outputs ────────────────
+                # Track on_chain_end events to accumulate state from each node
+                # This replaces the second graph.ainvoke() call that was
+                # doubling all API calls
+                elif event_name == "on_chain_end" and node_name in {
+                    "retrieval", "researcher", "critic", "synthesizer", "supervisor"
+                }:
+                    output = event_data.get("output")
+                    if isinstance(output, dict):
+                        final_state.update(output)
 
                 # ── LLM Token Streaming ──────────────────────────────────
                 # INTERVIEW: "How do you stream individual tokens from the LLM?"
@@ -291,9 +306,9 @@ async def query_streaming(
                             }),
                         }
 
-            # ── Get Final State ──────────────────────────────────────────
-            # Re-invoke to get final state (astream_events doesn't return final state directly)
-            final_state = await graph.ainvoke(initial_state)
+            # ── Emit Final State ─────────────────────────────────────────
+            # Final state was captured from on_chain_end events above —
+            # no need for a second graph.ainvoke() call
             elapsed_ms = (time.time() - start_time) * 1000
 
             # Emit done event

@@ -1,0 +1,15 @@
+# ── Evaluation Dependencies ──────────────────────────────────────────────────
+# These packages are OPTIONAL and only needed for the /evaluate/run endpoint.
+# They add ~300MB+ of dependencies (ragas, datasets, torch/transformers extras).
+#
+# Install with: pip install -r requirements-eval.txt
+# Skip for lightweight deployment on free-tier platforms.
+
+-r requirements.txt
+
+# ── RAGAS Evaluation Framework ──────────────────────────────────────────────
+ragas==0.1.13
+datasets==2.20.0
+
+# ── LangChain Community (needed by RAGAS for HuggingFaceEmbeddings) ─────────
+langchain-community

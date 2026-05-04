@@ -172,43 +172,69 @@ def build_papermind_graph(
     Build and compile the PaperMind LangGraph.
     Returns a compiled graph ready to invoke.
 
+    Supports two modes controlled by LIGHTWEIGHT_PIPELINE env var:
+
+    LIGHTWEIGHT (default, LIGHTWEIGHT_PIPELINE=true):
+      START → [retrieval] → [synthesizer] → [supervisor] → END
+      1 LLM call. Fast, cheap, ideal for deployment.
+
+    FULL (LIGHTWEIGHT_PIPELINE=false):
+      START → [retrieval] → [researcher] → [critic]
+          ├── score >= MIN → [synthesizer] → [supervisor] → END
+          └── score < MIN  → [retrieval] (retry, up to MAX_AGENT_ITERATIONS)
+      3-10 LLM calls. Higher quality, uses more API credits.
+
     INTERVIEW: "What does graph.compile() do?"
     Compile validates the graph structure (checks for unreachable nodes,
     missing edges, type mismatches in state), and returns a runnable
     object with .invoke() and .astream() methods.
     """
+    settings = get_settings()
     graph = StateGraph(PaperMindState)
 
     # Create retrieval node with dependencies injected
     retrieval_node = create_retrieval_node(retriever, reranker)
 
-    # ── Add Nodes ──────────────────────────────────────────────────────────
-    graph.add_node("retrieval", retrieval_node)
-    graph.add_node("researcher", researcher_node)
-    graph.add_node("critic", critic_node)
-    graph.add_node("synthesizer", synthesizer_node)
-    graph.add_node("supervisor", supervisor_node)
+    if settings.LIGHTWEIGHT_PIPELINE:
+        # ── Lightweight Pipeline ──────────────────────────────────────────
+        # Skips researcher + critic agents for minimal API usage (1 LLM call)
+        logger.info("Building LIGHTWEIGHT pipeline (retrieval → synthesizer → supervisor)")
 
-    # ── Add Edges ──────────────────────────────────────────────────────────
-    # Entry point
-    graph.set_entry_point("retrieval")
+        graph.add_node("retrieval", retrieval_node)
+        graph.add_node("synthesizer", synthesizer_node)
+        graph.add_node("supervisor", supervisor_node)
 
-    # Fixed edges (always happen)
-    graph.add_edge("retrieval", "researcher")
-    graph.add_edge("researcher", "critic")
+        graph.set_entry_point("retrieval")
+        graph.add_edge("retrieval", "synthesizer")
+        graph.add_edge("synthesizer", "supervisor")
+        graph.add_edge("supervisor", END)
+    else:
+        # ── Full Multi-Agent Pipeline ─────────────────────────────────────
+        # Uses all agents with retry loop for highest quality answers
+        logger.info("Building FULL pipeline (retrieval → researcher → critic → synthesizer → supervisor)")
 
-    # Conditional edge after critic — core of the retry loop
-    graph.add_conditional_edges(
-        "critic",
-        route_after_critic,
-        {
-            "synthesizer": "synthesizer",
-            "retrieval": "retrieval",  # Back-edge creates the retry loop
-        },
-    )
+        graph.add_node("retrieval", retrieval_node)
+        graph.add_node("researcher", researcher_node)
+        graph.add_node("critic", critic_node)
+        graph.add_node("synthesizer", synthesizer_node)
+        graph.add_node("supervisor", supervisor_node)
 
-    graph.add_edge("synthesizer", "supervisor")
-    graph.add_edge("supervisor", END)
+        graph.set_entry_point("retrieval")
+        graph.add_edge("retrieval", "researcher")
+        graph.add_edge("researcher", "critic")
+
+        # Conditional edge after critic — core of the retry loop
+        graph.add_conditional_edges(
+            "critic",
+            route_after_critic,
+            {
+                "synthesizer": "synthesizer",
+                "retrieval": "retrieval",  # Back-edge creates the retry loop
+            },
+        )
+
+        graph.add_edge("synthesizer", "supervisor")
+        graph.add_edge("supervisor", END)
 
     compiled = graph.compile()
     logger.info("PaperMind LangGraph compiled successfully")

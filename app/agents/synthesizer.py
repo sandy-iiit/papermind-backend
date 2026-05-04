@@ -36,18 +36,22 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.state import PaperMindState
-from app.config import get_llm
+from app.config import get_llm_streaming, get_settings
 
 logger = logging.getLogger(__name__)
 
 
-def _get_synthesis_prompt(mode: str) -> str:
+def _get_synthesis_prompt(mode: str, lightweight: bool = False) -> str:
     """
     Mode-specific synthesis prompt.
     INTERVIEW: "Why different prompts for research vs docs?"
     Users in research mode want academic-style answers with paper citations.
     Users in docs mode want concise, actionable answers with code snippets.
     Same pipeline, different output formatting — single responsibility.
+
+    When lightweight=True, the prompt also includes instructions for analysis
+    that would normally come from the researcher agent, since the synthesizer
+    is the only LLM call in the pipeline.
     """
     base = dedent("""
     You are PaperMind, an expert knowledge synthesizer.
@@ -59,6 +63,17 @@ def _get_synthesis_prompt(mode: str) -> str:
     3. If the context doesn't fully answer the query, explicitly state what's missing.
     4. Format your response in Markdown.
     5. End with a "## Sources" section listing all cited sources.
+    """).strip()
+
+    if lightweight:
+        # In lightweight mode, the synthesizer also performs the researcher's analysis
+        base += dedent("""
+
+    ANALYSIS INSTRUCTIONS (since you are doing analysis + synthesis in one step):
+    - First internally assess how well the context answers the query
+    - Identify the most relevant key points from the context
+    - Note any gaps or contradictions in the information
+    - Then synthesize a well-structured answer based on your analysis
     """).strip()
 
     if mode == "research":
@@ -93,15 +108,21 @@ async def synthesizer_node(state: PaperMindState) -> dict:
     1. Explicit instruction: "ONLY use information from the provided context"
     2. Low temperature (0.1): reduces creative deviation
     3. Supervisor agent validates citations afterward — catches hallucinations
+
+    In LIGHTWEIGHT mode, this is the ONLY LLM call in the pipeline.
+    The prompt is enhanced to also cover analysis that the researcher agent
+    would normally perform. This keeps API calls to exactly 1 per question.
     """
     logger.info(f"Synthesizer agent | session={state.get('session_id')}")
 
+    settings = get_settings()
     query = state["query"]
     mode = state.get("mode", "research")
     retrieved_chunks = state.get("retrieved_chunks", [])
     research_analysis = state.get("research_analysis", "")
     key_points = state.get("key_points", [])
     critic_score = state.get("critic_score", 0.7)
+    lightweight = settings.LIGHTWEIGHT_PIPELINE
 
     if not retrieved_chunks:
         return {
@@ -114,7 +135,9 @@ async def synthesizer_node(state: PaperMindState) -> dict:
     context_str, source_metadata = _format_context_with_sources(retrieved_chunks, mode)
 
     hedging_instruction = ""
-    if critic_score < 0.7:
+    # In lightweight mode, critic_score won't be set (stays at default 0.7),
+    # so hedging only applies in full pipeline mode
+    if not lightweight and critic_score < 0.7:
         hedging_instruction = (
             f"\nNOTE: The retrieved context has a quality score of {critic_score:.2f} (below optimal). "
             "Be explicit about any uncertainties and recommend the user verify key claims."
@@ -126,12 +149,18 @@ async def synthesizer_node(state: PaperMindState) -> dict:
     else:
         user_instruction = ""
 
+    # Build user message — in lightweight mode, skip researcher's key points section
+    if lightweight or not key_points:
+        key_points_section = ""
+    else:
+        key_points_section = f"""
+    RESEARCHER'S KEY POINTS:
+    {chr(10).join(f"• {p}" for p in key_points)}
+    """
+
     user_message = dedent(f"""
     QUERY: {query}
-
-    RESEARCHER'S KEY POINTS:
-    {chr(10).join(f"• {p}" for p in key_points) if key_points else "See context below"}
-
+    {key_points_section}
     RETRIEVED CONTEXT:
     {context_str}
     {hedging_instruction}
@@ -141,9 +170,10 @@ async def synthesizer_node(state: PaperMindState) -> dict:
     Generate a Markdown answer with inline [Source N] citations. End with a ## Sources section.
     """).strip()
 
-    llm = get_llm()
+    # Use streaming LLM for token-by-token SSE output
+    llm = get_llm_streaming()
     messages = [
-        SystemMessage(content=_get_synthesis_prompt(mode)),
+        SystemMessage(content=_get_synthesis_prompt(mode, lightweight=lightweight)),
         HumanMessage(content=user_message),
     ]
 
@@ -151,22 +181,10 @@ async def synthesizer_node(state: PaperMindState) -> dict:
         response = await llm.ainvoke(messages)
         answer = response.content.strip()
 
-        # Enforce docs-mode brevity: if answer >150 words, ask the LLM to rewrite concisely
-        if mode == "docs":
-            word_count = len(answer.split())
-            if word_count > 150:
-                logger.info(f"Answer too long for docs mode ({word_count} words). Requesting concise rewrite.")
-                short_system = SystemMessage(content=(
-                    "Rewrite the following Markdown answer to be at most 150 words "
-                    "(excluding the ## Sources section). Preserve all inline [Source N] citations exactly as-is, "
-                    "and do not invent or remove citations. Preserve code blocks without modification. Keep TL;DR 1-2 sentences at the top."
-                ))
-                short_human = HumanMessage(content=answer)
-                try:
-                    short_resp = await llm.ainvoke([short_system, short_human])
-                    answer = short_resp.content.strip()
-                except Exception as se:
-                    logger.warning(f"Concise rewrite failed: {se}. Returning original longer answer.")
+        # In lightweight mode, we do NOT make a second LLM call for brevity rewrite.
+        # The prompt already enforces the 150-word limit for docs mode.
+        # In full pipeline mode, we also skip the rewrite to save API calls —
+        # the prompt is strong enough to produce concise answers.
 
         # Extract citations from [Source N] markers in the answer
         citations = _extract_citations(answer, source_metadata, retrieved_chunks)
@@ -174,7 +192,8 @@ async def synthesizer_node(state: PaperMindState) -> dict:
         logger.info(
             f"Synthesizer complete | "
             f"answer_length={len(answer)} | "
-            f"citations={len(citations)}"
+            f"citations={len(citations)} | "
+            f"lightweight={lightweight}"
         )
 
         return {

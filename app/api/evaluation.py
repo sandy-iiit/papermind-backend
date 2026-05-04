@@ -69,7 +69,21 @@ async def run_evaluation(
     - RAGAS metrics: ~30-50 LLM calls → ~60-90s
     Total: ~2-3 minutes for N=10
     This is why we run it async/nightly in production.
+
+    NOTE: Requires optional evaluation dependencies (pip install -r requirements-eval.txt).
+    Returns HTTP 501 if ragas is not installed.
     """
+    # Guard: check if evaluation dependencies are available
+    try:
+        import ragas  # noqa: F401
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Evaluation dependencies not installed. "
+                "Run: pip install -r requirements-eval.txt"
+            ),
+        )
     settings = get_settings()
     start_time = time.time()
     mode = eval_req.mode.value

@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     MAX_AGENT_ITERATIONS: int = Field(default=3)
     MIN_CRITIC_SCORE: float = Field(default=0.70)
 
+    # ── Pipeline Mode ──────────────────────────────────────────────────────
+    # LIGHTWEIGHT_PIPELINE=true (default): Skip researcher + critic agents.
+    #   Graph: retrieval → synthesizer → supervisor  (1 LLM call)
+    # LIGHTWEIGHT_PIPELINE=false: Full multi-agent pipeline with retry loop.
+    #   Graph: retrieval → researcher → critic → (retry?) → synthesizer → supervisor (3-10 LLM calls)
+    LIGHTWEIGHT_PIPELINE: bool = Field(default=True)
+
     # ── Evaluation ──────────────────────────────────────────────────────────
     EVAL_SAMPLE_SIZE: int = Field(default=10)
 
@@ -133,6 +140,9 @@ def get_llm(settings: Settings | None = None):
     This factory function is the single place that imports/instantiates the LLM.
     To switch providers: swap ChatGroq for ChatOpenAI, ChatAnthropic, etc.
     All agent code receives an LLM object and calls .invoke() / .astream() — provider-agnostic.
+
+    Non-streaming variant — avoids ChatGroq streaming overhead when SSE is not needed.
+    Used by: researcher, critic, non-streaming query endpoint.
     """
     from langchain_groq import ChatGroq
 
@@ -142,6 +152,23 @@ def get_llm(settings: Settings | None = None):
         model=s.GROQ_MODEL_NAME,
         temperature=s.GROQ_TEMPERATURE,
         max_tokens=s.GROQ_MAX_TOKENS,
-        # streaming=True is needed for SSE token-by-token output
+        streaming=False,
+    )
+
+
+def get_llm_streaming(settings: Settings | None = None):
+    """
+    Streaming variant of the LLM factory.
+    streaming=True is needed for SSE token-by-token output in the /chat/stream endpoint.
+    Used by: synthesizer (when called via the streaming endpoint).
+    """
+    from langchain_groq import ChatGroq
+
+    s = settings or get_settings()
+    return ChatGroq(
+        api_key=s.GROQ_API_KEY,
+        model=s.GROQ_MODEL_NAME,
+        temperature=s.GROQ_TEMPERATURE,
+        max_tokens=s.GROQ_MAX_TOKENS,
         streaming=True,
     )
